@@ -248,7 +248,6 @@ fn render_html(photos: &[TemplatePhoto]) -> anyhow::Result<String> {
     context.insert("photos", photos);
 
     tracing::info!(length = photos.len(), "rendering html");
-
     Ok(tera.render("index.html", &context)?)
 }
 
@@ -284,7 +283,9 @@ fn build() -> anyhow::Result<()> {
         })
     }
 
+    processed_photos.sort_by(|a, b| a.source.path.cmp(&b.source.path));
     tracing::debug!(?processed_photos);
+
     let template_photos: Vec<TemplatePhoto> = processed_photos
         .into_iter()
         .map(TemplatePhoto::from)
