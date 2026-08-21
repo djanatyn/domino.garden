@@ -6,9 +6,11 @@ use std::{
 };
 
 use clap::{Parser, Subcommand};
+use serde::Serialize;
+use tera::Tera;
 use walkdir::{DirEntry, WalkDir};
 
-const IMAGE_DIRECTORY: &str = "originals/";
+const IMAGE_DIRECTORY: &str = "originals";
 const PUBLIC_DIRECTORY: &str = "public";
 
 #[derive(Debug)]
@@ -37,6 +39,45 @@ struct ProcessedPhoto {
     source: SourcePhoto,
     thumb: RenderedPhoto,
     full: RenderedPhoto,
+}
+
+/// {% for photo in photos %}
+/// <a
+///     href="{{photo.href}}"
+///     data-pswp-width="{{photo.width}}"
+///     data-pswp-height="{{photo.height}}"
+///     target="_blank"
+///     class="aspect-square overflow-hidden rounded-xl bg-neutral-100 shadow-md transition duration-200 hover:scale-[1.02] hover:shadow-lg focus:outline-none focus:ring-4 focus:ring-amber-300">
+///     <img src="{{photo.src}}" alt="{{photo.alt}}" class="h-full w-full object-cover" loading="lazy" />
+/// </a>
+/// {% endfor %}
+#[derive(Debug, Serialize)]
+struct TemplatePhoto {
+    href: String,
+    width: u32,
+    height: u32,
+    src: String,
+    alt: String,
+}
+
+impl TemplatePhoto {
+    const PHOTO_URL_ORIGIN: &str = "https://assets.domino.garden/file/domino-garden-public";
+
+    fn asset_url(url: &str) -> String {
+        return Self::PHOTO_URL_ORIGIN.to_string() + url;
+    }
+}
+
+impl From<ProcessedPhoto> for TemplatePhoto {
+    fn from(value: ProcessedPhoto) -> Self {
+        TemplatePhoto {
+            href: TemplatePhoto::asset_url(&value.full.url),
+            width: value.full.width,
+            height: value.full.height,
+            src: TemplatePhoto::asset_url(&value.thumb.url),
+            alt: format!("domino photo {}", value.source.short_hash()),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -147,7 +188,6 @@ fn image_dimension(path: &Path) -> anyhow::Result<(u32, u32)> {
 }
 
 fn generate_photo(photo: &SourcePhoto, image_type: ImageType) -> anyhow::Result<RenderedPhoto> {
-    let stem = &photo.stem;
     let hash = &photo.short_hash();
     let public_path = PathBuf::from(PUBLIC_DIRECTORY)
         .join("photos")
@@ -200,6 +240,18 @@ fn generate_photo(photo: &SourcePhoto, image_type: ImageType) -> anyhow::Result<
     })
 }
 
+fn render_html(photos: &[TemplatePhoto]) -> anyhow::Result<String> {
+    let mut tera = Tera::default();
+    tera.add_template_file("templates/index.html", Some("index.html"))?;
+
+    let mut context = tera::Context::new();
+    context.insert("photos", photos);
+
+    tracing::info!(length = photos.len(), "rendering html");
+
+    Ok(tera.render("index.html", &context)?)
+}
+
 fn build() -> anyhow::Result<()> {
     let mut seen = HashSet::new();
     let photos: Vec<SourcePhoto> = WalkDir::new(IMAGE_DIRECTORY)
@@ -233,6 +285,14 @@ fn build() -> anyhow::Result<()> {
     }
 
     tracing::debug!(?processed_photos);
+    let template_photos: Vec<TemplatePhoto> = processed_photos
+        .into_iter()
+        .map(TemplatePhoto::from)
+        .collect();
+
+    let html = render_html(&template_photos)?;
+    let html_path = PathBuf::from(PUBLIC_DIRECTORY).join("index.html");
+    fs::write(html_path, html)?;
 
     Ok(())
 }
