@@ -246,6 +246,7 @@ fn render_html(photos: &[TemplatePhoto]) -> anyhow::Result<String> {
 
     let mut context = tera::Context::new();
     context.insert("photos", photos);
+    context.insert("total_photos", &photos.len());
 
     tracing::info!(length = photos.len(), "rendering html");
     Ok(tera.render("index.html", &context)?)

@@ -666,14 +666,14 @@ video {
   letter-spacing: -0.025em;
 }
 
-.text-neutral-950 {
-  --tw-text-opacity: 1;
-  color: rgb(10 10 10 / var(--tw-text-opacity, 1));
-}
-
 .text-blue-600 {
   --tw-text-opacity: 1;
   color: rgb(37 99 235 / var(--tw-text-opacity, 1));
+}
+
+.text-neutral-950 {
+  --tw-text-opacity: 1;
+  color: rgb(10 10 10 / var(--tw-text-opacity, 1));
 }
 
 .shadow-md {
