@@ -61,4 +61,8 @@ Cache-Control: public, max-age=300
 - use `rayon` instead of serial execution
 - finish `deploy` to call `rclone` (validation step?)
 - add more alt text (store in kdl? or metadata of photos?)
-- intentional sorting? check EXIF datetime information
+- intentional sorting?
+
+## inspiration
+
+- https://emma.pet
