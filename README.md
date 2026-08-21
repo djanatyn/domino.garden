@@ -36,6 +36,9 @@ caddy file-server --root public --listen :8080
 
 # rust (generate images)
 watchexec -e rs -- cargo run -- build
+
+# sync media assets to backblaze
+rclone sync public/photos/ b2:domino-garden-public/photos
 ```
 
 ## caching
