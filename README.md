@@ -11,7 +11,9 @@ he's wonderful, i know
 - static html site generated from rust with tera,
 - blake3 to content-hash images,
 - imagemagick to generate web-safe photos,
-- rclone to sync images to backblaze-b2, 
+- photoswipe to navigate those photos,
+- tailwind to make a grid...
+- rclone to sync images to backblaze-b2,
 - cloudflare pages for hosting/caching
 
 ## updating the site
