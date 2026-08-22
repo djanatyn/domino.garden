@@ -61,9 +61,6 @@ Cache-Control: public, max-age=300
 
 ## todo
 
-- dark mode?
-- use `rayon` instead of serial execution
-- finish `deploy` to call `rclone` (validation step?)
 - add more alt text (store in kdl? or metadata of photos?)
 - intentional sorting?
 

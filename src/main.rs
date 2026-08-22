@@ -6,9 +6,49 @@ use std::{
 };
 
 use clap::{Parser, Subcommand};
+use rayon::prelude::*;
 use serde::Serialize;
 use tera::Tera;
 use walkdir::{DirEntry, WalkDir};
+
+use opentelemetry::global;
+use opentelemetry::trace::TracerProvider;
+use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_sdk::{Resource, trace};
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+
+fn init_tracing() -> anyhow::Result<trace::SdkTracerProvider> {
+    let exporter = opentelemetry_otlp::SpanExporter::builder()
+        .with_tonic()
+        .with_endpoint("http://localhost:4317")
+        .build()?;
+
+    let tracer_provider = trace::SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
+        .with_resource(
+            Resource::builder()
+                .with_service_name("domino-garden")
+                .build(),
+        )
+        .build();
+
+    let tracer = tracer_provider.tracer("domino-garden");
+
+    global::set_tracer_provider(tracer_provider.clone());
+
+    let stdout_layer = tracing_subscriber::fmt::layer().with_thread_names(true);
+    let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
+
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(stdout_layer)
+        .with(otel_layer)
+        .init();
+
+    Ok(tracer_provider)
+}
 
 const IMAGE_DIRECTORY: &str = "originals";
 const PUBLIC_DIRECTORY: &str = "public";
@@ -98,6 +138,7 @@ enum CliCommand {
 }
 
 impl CliCommand {
+    #[tracing::instrument(err)]
     fn run(&self) -> anyhow::Result<()> {
         match self {
             CliCommand::Build {} => build(),
@@ -114,6 +155,7 @@ fn image_file(entry: &DirEntry) -> bool {
         .unwrap_or(false)
 }
 
+#[tracing::instrument(skip_all, fields(path = %path.display()))]
 fn hash_photo(path: &Path) -> anyhow::Result<String> {
     let bytes = fs::read(path)?;
     let hash = blake3::hash(&bytes);
@@ -152,6 +194,7 @@ fn add_imagemagick_args(
     command.arg(output);
 }
 
+#[tracing::instrument(err)]
 fn image_dimension(path: &Path) -> anyhow::Result<(u32, u32)> {
     let output = Command::new("magick")
         .arg("identify")
@@ -177,6 +220,7 @@ fn image_dimension(path: &Path) -> anyhow::Result<(u32, u32)> {
     Ok((width.parse()?, height.parse()?))
 }
 
+#[tracing::instrument(err)]
 fn deploy_photos() -> anyhow::Result<()> {
     tracing::info!("deploying photos");
     let output = std::process::Command::new("rclone")
@@ -196,6 +240,7 @@ fn deploy_photos() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tracing::instrument(skip(photo), fields(hash = photo.short_hash(), ?image_type))]
 fn process_photo(photo: &SourcePhoto, image_type: ImageType) -> anyhow::Result<RenderedPhoto> {
     let hash = &photo.short_hash();
     let public_path = PathBuf::from(PUBLIC_DIRECTORY)
@@ -249,6 +294,7 @@ fn process_photo(photo: &SourcePhoto, image_type: ImageType) -> anyhow::Result<R
     })
 }
 
+#[tracing::instrument(err)]
 fn render_html(photos: &[TemplatePhoto]) -> anyhow::Result<String> {
     let mut tera = Tera::default();
     tera.add_template_file("templates/index.html", Some("index.html"))?;
@@ -261,41 +307,54 @@ fn render_html(photos: &[TemplatePhoto]) -> anyhow::Result<String> {
     Ok(tera.render("index.html", &context)?)
 }
 
+#[tracing::instrument(err)]
 fn build() -> anyhow::Result<()> {
+    tracing::info!("building thumb + full photos");
     let mut seen = HashSet::new();
-    let photos: Vec<SourcePhoto> = WalkDir::new(IMAGE_DIRECTORY)
+    let image_paths: Vec<PathBuf> = WalkDir::new(IMAGE_DIRECTORY)
         .into_iter()
         .filter_map(Result::ok)
         .filter(image_file)
-        .filter_map(|image| {
-            let path = image.into_path();
-            let hash = hash_photo(&path).ok()?;
-            let stem = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("photo")
-                .to_string();
-
-            Some(SourcePhoto {
-                path: path.to_path_buf(),
-                stem,
-                hash,
-            })
-        })
-        .filter(|photo| seen.insert(photo.hash.clone()))
+        .map(|image| image.into_path())
         .collect();
 
-    let mut processed_photos: Vec<ProcessedPhoto> = vec![];
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(8).build()?;
+    let mut photos: Vec<SourcePhoto> = pool.install(|| {
+        image_paths
+            .into_par_iter()
+            .map(|path| {
+                let hash = hash_photo(&path)?;
+                let stem = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("photo")
+                    .to_string();
 
-    for photo in photos {
-        let thumb = process_photo(&photo, ImageType::Thumb)?;
-        let full = process_photo(&photo, ImageType::Full)?;
-        processed_photos.push(ProcessedPhoto {
-            source: photo,
-            thumb,
-            full,
-        })
-    }
+                Ok(SourcePhoto {
+                    path: path.to_path_buf(),
+                    stem,
+                    hash,
+                })
+            })
+            .collect::<anyhow::Result<Vec<SourcePhoto>>>()
+    })?;
+
+    photos.retain(|photo| seen.insert(photo.hash.clone()));
+    let mut processed_photos: Vec<ProcessedPhoto> = pool.install(|| {
+        photos
+            .into_par_iter()
+            .map(|photo| {
+                let thumb = process_photo(&photo, ImageType::Thumb)?;
+                let full = process_photo(&photo, ImageType::Full)?;
+
+                Ok(ProcessedPhoto {
+                    source: photo,
+                    thumb,
+                    full,
+                })
+            })
+            .collect::<anyhow::Result<Vec<ProcessedPhoto>>>()
+    })?;
 
     processed_photos.sort_by(|a, b| a.source.stem.cmp(&b.source.stem));
     tracing::debug!(?processed_photos);
@@ -312,7 +371,13 @@ fn build() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt().with_thread_names(true).init();
-    Cli::parse().command.run()
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let tracer_provider = init_tracing()?;
+    let result = Cli::parse().command.run();
+
+    if let Err(err) = tracer_provider.shutdown() {
+        eprintln!("failed to shutdown tracer provider: {err}");
+    }
+    result
 }
