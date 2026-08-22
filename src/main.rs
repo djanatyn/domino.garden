@@ -17,39 +17,6 @@ use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::{Resource, trace};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
-fn init_tracing() -> anyhow::Result<trace::SdkTracerProvider> {
-    let exporter = opentelemetry_otlp::SpanExporter::builder()
-        .with_tonic()
-        .with_endpoint("http://localhost:4317")
-        .build()?;
-
-    let tracer_provider = trace::SdkTracerProvider::builder()
-        .with_batch_exporter(exporter)
-        .with_resource(
-            Resource::builder()
-                .with_service_name("domino-garden")
-                .build(),
-        )
-        .build();
-
-    let tracer = tracer_provider.tracer("domino-garden");
-
-    global::set_tracer_provider(tracer_provider.clone());
-
-    let stdout_layer = tracing_subscriber::fmt::layer().with_thread_names(true);
-    let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
-
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-
-    tracing_subscriber::registry()
-        .with(env_filter)
-        .with(stdout_layer)
-        .with(otel_layer)
-        .init();
-
-    Ok(tracer_provider)
-}
-
 const IMAGE_DIRECTORY: &str = "originals";
 const PUBLIC_DIRECTORY: &str = "public";
 
@@ -195,7 +162,7 @@ fn add_imagemagick_args(
 }
 
 #[tracing::instrument(err)]
-fn image_dimension(path: &Path) -> anyhow::Result<(u32, u32)> {
+fn image_dimensions(path: &Path) -> anyhow::Result<(u32, u32)> {
     let output = Command::new("magick")
         .arg("identify")
         .arg("-format")
@@ -267,7 +234,7 @@ fn process_photo(photo: &SourcePhoto, image_type: ImageType) -> anyhow::Result<R
             ?public_path,
             ?command,
             ?image_type,
-            "generating photo"
+            "processing photo"
         );
 
         let status = command.status()?;
@@ -284,7 +251,7 @@ fn process_photo(photo: &SourcePhoto, image_type: ImageType) -> anyhow::Result<R
 
     let (width, height) = match image_type {
         ImageType::Thumb => (500, 500),
-        ImageType::Full => image_dimension(&public_path)?,
+        ImageType::Full => image_dimensions(&public_path)?,
     };
 
     Ok(RenderedPhoto {
@@ -297,6 +264,7 @@ fn process_photo(photo: &SourcePhoto, image_type: ImageType) -> anyhow::Result<R
 
 #[tracing::instrument(err)]
 fn render_html(photos: &[TemplatePhoto]) -> anyhow::Result<String> {
+    tracing::info!("loading html template");
     let mut tera = Tera::default();
     tera.add_template_file("templates/index.html", Some("index.html"))?;
 
@@ -319,11 +287,13 @@ fn build() -> anyhow::Result<()> {
         .map(|image| image.into_path())
         .collect();
 
+    let parent = tracing::Span::current();
     let pool = rayon::ThreadPoolBuilder::new().num_threads(8).build()?;
     let mut photos: Vec<SourcePhoto> = pool.install(|| {
         image_paths
             .into_par_iter()
             .map(|path| {
+                let _guard = parent.enter();
                 let hash = hash_photo(&path)?;
                 let stem = path
                     .file_stem()
@@ -345,6 +315,7 @@ fn build() -> anyhow::Result<()> {
         photos
             .into_par_iter()
             .map(|photo| {
+                let _guard = parent.enter();
                 let thumb = process_photo(&photo, ImageType::Thumb)?;
                 let full = process_photo(&photo, ImageType::Full)?;
 
@@ -370,6 +341,39 @@ fn build() -> anyhow::Result<()> {
     fs::write(html_path, html)?;
 
     Ok(())
+}
+
+fn init_tracing() -> anyhow::Result<trace::SdkTracerProvider> {
+    let exporter = opentelemetry_otlp::SpanExporter::builder()
+        .with_tonic()
+        .with_endpoint("http://localhost:4317")
+        .build()?;
+
+    let tracer_provider = trace::SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
+        .with_resource(
+            Resource::builder()
+                .with_service_name("domino-garden")
+                .build(),
+        )
+        .build();
+
+    let tracer = tracer_provider.tracer("domino-garden");
+
+    global::set_tracer_provider(tracer_provider.clone());
+
+    let stdout_layer = tracing_subscriber::fmt::layer().with_thread_names(true);
+    let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
+
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or(EnvFilter::new("info"));
+
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(stdout_layer)
+        .with(otel_layer)
+        .init();
+
+    Ok(tracer_provider)
 }
 
 #[tokio::main]
