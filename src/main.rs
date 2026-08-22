@@ -28,7 +28,7 @@ impl SourcePhoto {
 
 #[derive(Debug)]
 struct RenderedPhoto {
-    path: PathBuf,
+    _path: PathBuf,
     url: String,
     width: u32,
     height: u32,
@@ -41,16 +41,6 @@ struct ProcessedPhoto {
     full: RenderedPhoto,
 }
 
-/// {% for photo in photos %}
-/// <a
-///     href="{{photo.href}}"
-///     data-pswp-width="{{photo.width}}"
-///     data-pswp-height="{{photo.height}}"
-///     target="_blank"
-///     class="aspect-square overflow-hidden rounded-xl bg-neutral-100 shadow-md transition duration-200 hover:scale-[1.02] hover:shadow-lg focus:outline-none focus:ring-4 focus:ring-amber-300">
-///     <img src="{{photo.src}}" alt="{{photo.alt}}" class="h-full w-full object-cover" loading="lazy" />
-/// </a>
-/// {% endfor %}
 #[derive(Debug, Serialize)]
 struct TemplatePhoto {
     href: String,
@@ -64,7 +54,7 @@ impl TemplatePhoto {
     const PHOTO_URL_ORIGIN: &str = "https://assets.domino.garden/file/domino-garden-public";
 
     fn asset_url(url: &str) -> String {
-        return Self::PHOTO_URL_ORIGIN.to_string() + url;
+        Self::PHOTO_URL_ORIGIN.to_string() + url
     }
 }
 
@@ -111,7 +101,7 @@ impl CliCommand {
     fn run(&self) -> anyhow::Result<()> {
         match self {
             CliCommand::Build {} => build(),
-            CliCommand::Deploy {} => todo!(),
+            CliCommand::Deploy {} => deploy_photos(),
         }
     }
 }
@@ -187,7 +177,26 @@ fn image_dimension(path: &Path) -> anyhow::Result<(u32, u32)> {
     Ok((width.parse()?, height.parse()?))
 }
 
-fn generate_photo(photo: &SourcePhoto, image_type: ImageType) -> anyhow::Result<RenderedPhoto> {
+fn deploy_photos() -> anyhow::Result<()> {
+    tracing::info!("deploying photos");
+    let output = std::process::Command::new("rclone")
+        .arg("sync")
+        .arg("public/photos/")
+        .arg("b2:domino-garden-public/photos")
+        .output()?;
+
+    if !output.status.success() {
+        return Err(anyhow::anyhow!(
+            "rclone failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    tracing::info!("deploying successful");
+    Ok(())
+}
+
+fn process_photo(photo: &SourcePhoto, image_type: ImageType) -> anyhow::Result<RenderedPhoto> {
     let hash = &photo.short_hash();
     let public_path = PathBuf::from(PUBLIC_DIRECTORY)
         .join("photos")
@@ -233,7 +242,7 @@ fn generate_photo(photo: &SourcePhoto, image_type: ImageType) -> anyhow::Result<
     };
 
     Ok(RenderedPhoto {
-        path: public_path,
+        _path: public_path,
         url,
         width,
         height,
@@ -267,7 +276,11 @@ fn build() -> anyhow::Result<()> {
                 .unwrap_or("photo")
                 .to_string();
 
-            Some(SourcePhoto { path, stem, hash })
+            Some(SourcePhoto {
+                path: path.to_path_buf(),
+                stem,
+                hash,
+            })
         })
         .filter(|photo| seen.insert(photo.hash.clone()))
         .collect();
@@ -275,8 +288,8 @@ fn build() -> anyhow::Result<()> {
     let mut processed_photos: Vec<ProcessedPhoto> = vec![];
 
     for photo in photos {
-        let thumb = generate_photo(&photo, ImageType::Thumb)?;
-        let full = generate_photo(&photo, ImageType::Full)?;
+        let thumb = process_photo(&photo, ImageType::Thumb)?;
+        let full = process_photo(&photo, ImageType::Full)?;
         processed_photos.push(ProcessedPhoto {
             source: photo,
             thumb,
@@ -284,7 +297,7 @@ fn build() -> anyhow::Result<()> {
         })
     }
 
-    processed_photos.sort_by(|a, b| a.source.path.cmp(&b.source.path));
+    processed_photos.sort_by(|a, b| a.source.stem.cmp(&b.source.stem));
     tracing::debug!(?processed_photos);
 
     let template_photos: Vec<TemplatePhoto> = processed_photos
