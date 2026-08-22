@@ -201,6 +201,7 @@ fn image_dimension(path: &Path) -> anyhow::Result<(u32, u32)> {
         .arg("-format")
         .arg("%w %h")
         .arg(path)
+        .env("MAGICK_THREAD_LIMIT", "1")
         .output()?;
 
     if !output.status.success() {
