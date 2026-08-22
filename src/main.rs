@@ -1,9 +1,9 @@
 use std::{
     collections::HashSet,
-    fs,
     path::{Path, PathBuf},
     process::Command,
 };
+use std::fs;
 
 use clap::{Parser, Subcommand};
 use rayon::prelude::*;
