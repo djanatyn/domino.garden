@@ -328,7 +328,7 @@ fn build() -> anyhow::Result<()> {
             .collect::<anyhow::Result<Vec<ProcessedPhoto>>>()
     })?;
 
-    processed_photos.sort_by(|a, b| a.source.stem.cmp(&b.source.stem));
+    processed_photos.sort_by(|a, b| b.source.stem.cmp(&a.source.stem));
     tracing::debug!(?processed_photos);
 
     let template_photos: Vec<TemplatePhoto> = processed_photos
