@@ -1,9 +1,9 @@
+use std::fs;
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
     process::Command,
 };
-use std::fs;
 
 use clap::{Parser, Subcommand};
 use rayon::prelude::*;
@@ -346,7 +346,7 @@ fn build() -> anyhow::Result<()> {
 fn init_tracing() -> anyhow::Result<trace::SdkTracerProvider> {
     let exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_tonic()
-        .with_endpoint("http://localhost:4317")
+        .with_endpoint("http://signoz.build.djan.org:4317")
         .build()?;
 
     let tracer_provider = trace::SdkTracerProvider::builder()
